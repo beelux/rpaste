@@ -11,6 +11,7 @@
          racket/logging
          racket/format
          racket/path
+         racket/string
          db
          openssl/sha1
          net/url
@@ -82,17 +83,22 @@
   (parameterize ([date-display-format 'rfc2822])
     (date->string (seconds->date epoch #f) #t)))
 
-(define (get-requested-host req)
-  (define h (headers-assq #"Host" (request-headers/raw req)))
-  (if h
-      (header-value h)
-      (format "~a:~a" (request-host-ip req) (request-host-port req))))
+(define (site-baseurl req)
+  (define h (request-headers/raw req))
+  (define s
+    (cond
+      [(headers-assq #"Forwarded" h) => (compose1 bytes->string/utf-8 header-value)]
+      [(headers-assq #"X-Forwarded-For" h) => (compose1 bytes->string/utf-8 header-value)]
+      [(getenv "APP_URL") => identity]
+      [(headers-assq #"Host" h) => (compose1 bytes->string/utf-8 header-value)]
+      [else (format "~a:~a" (request-host-ip req) (request-host-port req))]))
+  (match (string-append (string-trim s "/" #:repeat? #t) "/") 
+    [(regexp "https?://.*" (list m)) m]
+    [no-scheme (string-append "http://" no-scheme)]))
 
 (define (list-pastes req)
   (define rows (query-rows (db-conn) "SELECT key, timestamp FROM Pastes ORDER BY timestamp DESC"))
-  (define site-address (match (getenv "APP_URL")
-                         [#f (get-requested-host req)]
-                         [s (string-append s "/")]))
+  (define address (site-baseurl req))
   (response/full
    200 #"Okay"
    (current-seconds) TEXT/HTML-MIME-TYPE
